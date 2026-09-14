@@ -120,8 +120,8 @@ MonoBehaviour:
   tba: 3
   rangeAttackRadius: 5
   meleeAttackRadius: 1.5
-  meleeDamage: 20
-  rangedDamage: 20
+  meleeDamage: 10
+  rangedDamage: 10
   gatherDuration: 2
   gatherInteractRadius: 1.2
   bodyRenderer: {fileID: 3255612882475019056}
