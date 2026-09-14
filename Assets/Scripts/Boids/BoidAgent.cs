@@ -49,7 +49,7 @@ namespace Boids
         [SerializeField] private Material deadMaterial;
         [SerializeField] private Color hitFlashColor = Color.white;
         [SerializeField] private float hitFlashDuration = 0.15f;
-        [SerializeField] private Color lowHealthColor = new Color(1f, 0.85f, 0.85f);
+        [SerializeField] private Color lowHealthColor = new Color(1f, 0.2f, 0.2f);
         [SerializeField] private float lowHealthThreshold = 0.5f;
 
         private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
