@@ -1,52 +1,30 @@
+using Boids;
+using FSM;
+
 namespace Hunter
 {
-    public class HunterAttackState : IHunterState
+    public class HunterAttackState : State<HunterController, HunterStateId>
     {
-        public void Enter(HunterController ctx)
-        {
-            ctx.SetBodyMaterial(ctx.AttackMaterial);
-        }
+        public HunterAttackState(HunterController owner, StateMachine<HunterStateId> machine) : base(owner, machine) { }
 
-        public void Tick(HunterController ctx, float deltaTime)
+        public override void Enter() => Owner.Path.Clear();
+
+        public override void Tick(float deltaTime)
         {
-            if (ctx.CurrentTarget != null && ctx.CurrentTarget.IsDead)
+            BoidAgent target = Owner.Target;
+            if (target == null || target.IsDead || !Owner.Perception.CanSee(target))
             {
-                ctx.TransitionTo(ctx.GatherState, "Gather");
+                TransitionTo(HunterStateId.Search);
                 return;
             }
 
-            if (ctx.CurrentTarget == null || ctx.DistanceToTarget() > ctx.VisionRange)
-                ctx.CurrentTarget = ctx.FindLivingBoidInRange();
-
-            if (ctx.CurrentTarget == null)
+            if (Owner.Combat.TryAttack(target))
             {
-                ctx.TransitionTo(ctx.PatrolState, "Patrol");
+                TransitionTo(HunterStateId.Search);
                 return;
             }
 
-            float distance = ctx.DistanceToTarget();
-
-            if (distance > ctx.MeleeStopRadius)
-                ctx.PursueTarget(ctx.CurrentTarget);
-            else
-                ctx.Stop();
-
-            if (!ctx.AttackReady)
-                return;
-
-            if (distance <= ctx.MeleeAttackRadius)
-                ctx.CurrentTarget.TakeDamage(ctx.MeleeDamage);
-            else if (distance <= ctx.RangeAttackRadius)
-                ctx.FireRangedAttack(ctx.CurrentTarget);
-            else
-                return;
-
-            ctx.ResetAttackTimer();
-
-            if (ctx.CurrentTarget.IsDead)
-                ctx.TransitionTo(ctx.GatherState, "Gather");
+            Owner.Combat.Pursue(target);
         }
-
-        public void Exit(HunterController ctx) { }
     }
 }

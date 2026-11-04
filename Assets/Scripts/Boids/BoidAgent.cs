@@ -1,174 +1,129 @@
-using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using Core;
+using FSM;
 using Hunter;
 using POI;
 using Steering;
 
 namespace Boids
 {
+    [RequireComponent(typeof(SteeringMotor), typeof(BoidFlocking), typeof(BoidHealth))]
     public class BoidAgent : MonoBehaviour
     {
-        private enum BoidTask { Roaming, SeekingPOI, Working, Dead }
-
-        [Header("Movement")]
-        [SerializeField] private float moveSpeed = 3.2f;
-        [SerializeField] private float maxForce = 8f;
-
-        [Header("Flocking radii")]
-        [SerializeField] private float separationRadius = 1.2f;
-        [SerializeField] private float neighborRadius = 4.5f;
-        [SerializeField] private LayerMask boidLayerMask;
-
-        [Header("Flocking weights")]
-        [SerializeField] private float separationWeight = 1.6f;
-        [SerializeField] private float alignmentWeight = 1f;
-        [SerializeField] private float cohesionWeight = 1f;
-        [SerializeField] private float arriveWeight = 1.2f;
-
         [Header("Evade")]
         [SerializeField] private float visionRange = 7f;
+        // Mayor que visionRange: con el mismo radio para entrar y salir, el Boid deja de huir apenas cruza el borde y vuelve a entrar enseguida.
+        [SerializeField] private float evadeExitRange = 11f;
         [SerializeField] private float evadeWeight = 2f;
+        [SerializeField] private float evadeSpeed = 4.5f;
         [SerializeField] private float evadePredictionTime = 0.5f;
+        // Mayor que wallMargin: empieza a deslizarse antes de que la contención lo frene contra la pared.
+        [SerializeField] private float wallSlideMargin = 3f;
+
+        [Header("Wander")]
+        [SerializeField] private float wanderWeight = 0.8f;
+        [SerializeField] private float wanderCircleDistance = 2f;
+        [SerializeField] private float wanderCircleRadius = 1f;
+        [SerializeField] private float wanderJitter = 360f;
 
         [Header("POI interaction")]
+        [SerializeField] private float arriveWeight = 1.2f;
         [SerializeField] private float arriveSlowingRadius = 3f;
         [SerializeField] private float arriveThreshold = 1f;
         [SerializeField] private float workDamagePerTick = 5f;
         [SerializeField] private float workTickInterval = 1f;
 
-        [Header("Health & respawn")]
-        [SerializeField] private float maxHealth = 20f;
-        [SerializeField] private float respawnDelay = 4f;
+        [Header("Containment")]
+        [SerializeField] private float wallMargin = 1.5f;
+        [SerializeField] private float containmentWeight = 3f;
+
+        [Header("Scene")]
         [SerializeField] private ArenaBounds arenaBounds;
+        [SerializeField] private HunterController hunter;
 
-        [Header("Materials")]
-        [SerializeField] private Renderer bodyRenderer;
-        [SerializeField] private Material aliveMaterial;
-        [SerializeField] private Material deadMaterial;
-        [SerializeField] private Color hitFlashColor = Color.white;
-        [SerializeField] private float hitFlashDuration = 0.15f;
-        [SerializeField] private Color lowHealthColor = new Color(1f, 0.2f, 0.2f);
-        [SerializeField] private float lowHealthThreshold = 0.5f;
+        private StateMachine<BoidStateId> _stateMachine;
 
-        private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
+        public SteeringMotor Motor { get; private set; }
+        public BoidFlocking Flocking { get; private set; }
+        public BoidHealth Health { get; private set; }
+        public PointOfInterest TargetPOI { get; set; }
 
-        private BoidTask _task = BoidTask.Roaming;
-        private Vector3 _velocity;
-        private float _currentHealth;
-        private PointOfInterest _targetPOI;
-        private float _workTimer;
-        private Collider _collider;
-        private MaterialPropertyBlock _propertyBlock;
-        private readonly Collider[] _overlapBuffer = new Collider[32];
-        private readonly List<BoidAgent> _separationNeighbors = new List<BoidAgent>();
-        private readonly List<BoidAgent> _flockNeighbors = new List<BoidAgent>();
+        public float CruiseSpeed { get; private set; }
 
-        public Vector3 Velocity => _velocity;
-        public bool IsDead => _task == BoidTask.Dead;
+        public float EvadeWeight => evadeWeight;
+        public float EvadeSpeed => evadeSpeed;
+        public float EvadePredictionTime => evadePredictionTime;
+        public float WanderWeight => wanderWeight;
+        public float WanderCircleDistance => wanderCircleDistance;
+        public float WanderCircleRadius => wanderCircleRadius;
+        public float WanderJitter => wanderJitter;
+        public float ArriveThreshold => arriveThreshold;
+        public float WorkDamagePerTick => workDamagePerTick;
+        public float WorkTickInterval => workTickInterval;
+
+        public Vector3 Velocity => Motor.Velocity;
+        public bool IsDead => Health.IsDead;
+        public bool IsCollectable => Health.IsCollectable;
+
+        public Vector3 ThreatPosition => hunter.transform.position;
+        public Vector3 ThreatVelocity => hunter.Velocity;
+        public bool SeesThreat => IsThreatWithin(transform.position, visionRange);
+        public bool IsSafeFromThreat => !IsThreatWithin(transform.position, evadeExitRange);
 
         private void Awake()
         {
-            _currentHealth = maxHealth;
-            _collider = GetComponent<Collider>();
-            _propertyBlock = new MaterialPropertyBlock();
+            Motor = GetComponent<SteeringMotor>();
+            Flocking = GetComponent<BoidFlocking>();
+            Health = GetComponent<BoidHealth>();
+            CruiseSpeed = Motor.MaxSpeed;
+            BuildStateMachine();
         }
 
-        private void Update()
+        private void Start() => _stateMachine.Start(BoidStateId.Roaming);
+
+        private void Update() => _stateMachine.Tick(Time.deltaTime);
+
+        private void BuildStateMachine()
         {
-            if (_task == BoidTask.Dead)
-                return;
+            _stateMachine = new StateMachine<BoidStateId>();
+            _stateMachine.AddState(BoidStateId.Roaming, new BoidRoamingState(this, _stateMachine));
+            _stateMachine.AddState(BoidStateId.SeekingPOI, new BoidSeekingPOIState(this, _stateMachine));
+            _stateMachine.AddState(BoidStateId.Working, new BoidWorkingState(this, _stateMachine));
+            _stateMachine.AddState(BoidStateId.Evading, new BoidEvadingState(this, _stateMachine));
+            _stateMachine.AddState(BoidStateId.Dead, new BoidDeadState(this, _stateMachine));
 
-            if (IsThreatVisible(out Vector3 threatPosition, out Vector3 threatVelocity))
-            {
-                Steer(SteeringBehaviours.Evade(transform.position, _velocity, threatPosition, threatVelocity, moveSpeed, evadePredictionTime) * evadeWeight);
-                Move();
-                return;
-            }
-
-            switch (_task)
-            {
-                case BoidTask.Roaming:
-                    TickRoaming();
-                    break;
-                case BoidTask.SeekingPOI:
-                    TickSeekingPOI();
-                    break;
-                case BoidTask.Working:
-                    TickWorking();
-                    break;
-            }
-
-            Move();
+            _stateMachine.AddAnyStateTransition(BoidStateId.Dead, () => Health.IsDead);
+            _stateMachine.AddAnyStateTransition(BoidStateId.Evading, () => !Health.IsDead && SeesThreat);
         }
 
-        private bool IsThreatVisible(out Vector3 threatPosition, out Vector3 threatVelocity)
+        private bool IsThreatWithin(Vector3 position, float range)
         {
-            HunterController hunter = HunterController.Instance;
-            if (hunter == null)
-            {
-                threatPosition = Vector3.zero;
-                threatVelocity = Vector3.zero;
-                return false;
-            }
-
-            threatPosition = hunter.transform.position;
-            threatVelocity = hunter.Velocity;
-            return Vector3.Distance(transform.position, threatPosition) <= visionRange;
+            return hunter.IsAlive && PlanarMath.Distance(position, hunter.transform.position) <= range;
         }
 
-        private void TickRoaming()
+        public void Steer(Vector3 force)
         {
-            GatherNeighbors();
-            Vector3 force = SteeringBehaviours.Separation(transform.position, _separationNeighbors, separationRadius) * separationWeight
-                + SteeringBehaviours.Alignment(_velocity, _flockNeighbors) * alignmentWeight
-                + SteeringBehaviours.Cohesion(transform.position, _flockNeighbors) * cohesionWeight;
-            Steer(force);
-
-            _targetPOI = FindClosestPOI();
-            if (_targetPOI != null)
-                _task = BoidTask.SeekingPOI;
+            Motor.ApplyForce(force + Containment() * containmentWeight);
+            transform.position = arenaBounds.ClampToArena(transform.position);
         }
 
-        private void TickSeekingPOI()
+        public void SteerTowardsPOI()
         {
-            if (_targetPOI == null)
-            {
-                _task = BoidTask.Roaming;
-                return;
-            }
-
-            GatherNeighbors();
-            Vector3 force = SteeringBehaviours.Separation(transform.position, _separationNeighbors, separationRadius) * separationWeight
-                + SteeringBehaviours.Arrive(transform.position, _velocity, _targetPOI.transform.position, moveSpeed, arriveSlowingRadius) * arriveWeight;
-            Steer(force);
-
-            if (Vector3.Distance(transform.position, _targetPOI.transform.position) <= arriveThreshold)
-            {
-                _task = BoidTask.Working;
-                _workTimer = 0f;
-                _velocity = Vector3.zero;
-            }
+            Vector3 arriveForce = SteeringBehaviours.Arrive(transform.position, Velocity, TargetPOI.transform.position, Motor.MaxSpeed, arriveSlowingRadius);
+            Steer(Flocking.GetSeparationForce() + arriveForce * arriveWeight);
         }
 
-        private void TickWorking()
+        public Vector3 GetNearbyWallsInward() => arenaBounds.GetInwardDirection(transform.position, wallSlideMargin);
+
+        // Los bordes del coto son paredes: cerca de ellos se empuja al Boid hacia adentro y el clamp impide que las cruce, incluso por las puertas.
+        private Vector3 Containment()
         {
-            if (_targetPOI == null)
-            {
-                _task = BoidTask.Roaming;
-                return;
-            }
-
-            _workTimer += Time.deltaTime;
-            if (_workTimer >= workTickInterval)
-            {
-                _workTimer = 0f;
-                _targetPOI.TakeDamage(workDamagePerTick);
-            }
+            return arenaBounds.GetInwardDirection(transform.position, wallMargin) * Motor.MaxSpeed;
         }
 
-        private PointOfInterest FindClosestPOI()
+        // El Cazador spawnea los POIs a su lado: sin este filtro el Boid deja de huir y vuelve derecho hacia él.
+        public PointOfInterest FindClosestSafePOI()
         {
             PointOfInterest closest = null;
             float closestDistance = float.MaxValue;
@@ -176,7 +131,10 @@ namespace Boids
             IReadOnlyList<PointOfInterest> active = POIManager.Active;
             for (int i = 0; i < active.Count; i++)
             {
-                float distance = Vector3.Distance(transform.position, active[i].transform.position);
+                if (IsThreatWithin(active[i].transform.position, visionRange))
+                    continue;
+
+                float distance = PlanarMath.Distance(transform.position, active[i].transform.position);
                 if (distance < closestDistance)
                 {
                     closestDistance = distance;
@@ -187,125 +145,8 @@ namespace Boids
             return closest;
         }
 
-        private void GatherNeighbors()
+        private void OnDrawGizmos()
         {
-            _separationNeighbors.Clear();
-            _flockNeighbors.Clear();
-
-            int count = Physics.OverlapSphereNonAlloc(transform.position, neighborRadius, _overlapBuffer, boidLayerMask);
-            for (int i = 0; i < count; i++)
-            {
-                BoidAgent other = _overlapBuffer[i].GetComponent<BoidAgent>();
-                if (other == null || other == this || other.IsDead)
-                    continue;
-
-                _flockNeighbors.Add(other);
-                if (Vector3.Distance(transform.position, other.transform.position) <= separationRadius)
-                    _separationNeighbors.Add(other);
-            }
-        }
-
-        private void Steer(Vector3 force)
-        {
-            force.y = 0f;
-            force = Vector3.ClampMagnitude(force, maxForce);
-            _velocity = Vector3.ClampMagnitude(_velocity + force * Time.deltaTime, moveSpeed);
-            _velocity.y = 0f;
-        }
-
-        private void Move()
-        {
-            if (_velocity.sqrMagnitude < 0.0001f)
-                return;
-
-            transform.position += _velocity * Time.deltaTime;
-            transform.forward = _velocity.normalized;
-
-            if (arenaBounds != null)
-                transform.position = arenaBounds.Wrap(transform.position);
-        }
-
-        public void TakeDamage(float amount)
-        {
-            if (_task == BoidTask.Dead)
-                return;
-
-            _currentHealth -= amount;
-            if (_currentHealth <= 0f)
-                Die();
-            else
-                StartCoroutine(HitFlash());
-        }
-
-        private IEnumerator HitFlash()
-        {
-            _propertyBlock.SetColor(BaseColorId, hitFlashColor);
-            bodyRenderer.SetPropertyBlock(_propertyBlock);
-            yield return new WaitForSeconds(hitFlashDuration);
-            RefreshHealthColor();
-        }
-
-        private void RefreshHealthColor()
-        {
-            if (_currentHealth <= maxHealth * lowHealthThreshold)
-            {
-                _propertyBlock.SetColor(BaseColorId, lowHealthColor);
-                bodyRenderer.SetPropertyBlock(_propertyBlock);
-            }
-            else
-            {
-                bodyRenderer.SetPropertyBlock(null);
-            }
-        }
-
-        private void Die()
-        {
-            _task = BoidTask.Dead;
-            StopAllCoroutines();
-            bodyRenderer.SetPropertyBlock(null);
-            _velocity = Vector3.zero;
-            _targetPOI = null;
-            if (bodyRenderer != null && deadMaterial != null)
-                bodyRenderer.material = deadMaterial;
-        }
-
-        public void OnGathered()
-        {
-            SetVisible(false);
-            StartCoroutine(RespawnAfterDelay());
-        }
-
-        private IEnumerator RespawnAfterDelay()
-        {
-            yield return new WaitForSeconds(respawnDelay);
-
-            Vector3 respawnPoint = arenaBounds.GetRandomPoint();
-            respawnPoint.y = transform.position.y;
-            transform.position = respawnPoint;
-            _currentHealth = maxHealth;
-            _velocity = Vector3.zero;
-            _task = BoidTask.Roaming;
-            if (bodyRenderer != null && aliveMaterial != null)
-                bodyRenderer.material = aliveMaterial;
-            RefreshHealthColor();
-
-            SetVisible(true);
-        }
-
-        private void SetVisible(bool visible)
-        {
-            if (bodyRenderer != null)
-                bodyRenderer.enabled = visible;
-            if (_collider != null)
-                _collider.enabled = visible;
-        }
-
-        private void OnDrawGizmosSelected()
-        {
-            Gizmos.color = Color.red;
-            Gizmos.DrawWireSphere(transform.position, separationRadius);
-            Gizmos.color = Color.yellow;
-            Gizmos.DrawWireSphere(transform.position, neighborRadius);
             Gizmos.color = Color.cyan;
             Gizmos.DrawWireSphere(transform.position, visionRange);
         }
