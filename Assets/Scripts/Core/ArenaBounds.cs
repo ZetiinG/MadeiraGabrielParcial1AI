@@ -4,6 +4,8 @@ namespace Core
 {
     public class ArenaBounds : MonoBehaviour
     {
+        private const float GizmoHeight = 0.1f;
+
         [SerializeField] private Vector2 size = new Vector2(30f, 30f);
 
         public Vector3 GetRandomPoint()
@@ -13,29 +15,28 @@ namespace Core
             return transform.position + new Vector3(x, 0f, z);
         }
 
-        public Vector3 Wrap(Vector3 position)
+        // Dirección hacia el interior desde los bordes que están a menos de margin; cero si la posición está lejos de todos.
+        public Vector3 GetInwardDirection(Vector3 position, float margin)
         {
-            Vector3 center = transform.position;
-            float halfX = size.x * 0.5f;
-            float halfZ = size.y * 0.5f;
+            Vector3 offset = position - transform.position;
+            float limitX = size.x * 0.5f - margin;
+            float limitZ = size.y * 0.5f - margin;
 
-            float x = position.x;
-            float z = position.z;
+            Vector3 inward = Vector3.zero;
+            if (offset.x > limitX) inward.x = -1f;
+            else if (offset.x < -limitX) inward.x = 1f;
 
-            if (x > center.x + halfX) x -= size.x;
-            else if (x < center.x - halfX) x += size.x;
+            if (offset.z > limitZ) inward.z = -1f;
+            else if (offset.z < -limitZ) inward.z = 1f;
 
-            if (z > center.z + halfZ) z -= size.y;
-            else if (z < center.z - halfZ) z += size.y;
-
-            return new Vector3(x, position.y, z);
+            return inward.normalized;
         }
 
-        public Vector3 ClampToArena(Vector3 position)
+        public Vector3 ClampToArena(Vector3 position, float margin = 0f)
         {
             Vector3 center = transform.position;
-            float halfX = size.x * 0.5f;
-            float halfZ = size.y * 0.5f;
+            float halfX = size.x * 0.5f - margin;
+            float halfZ = size.y * 0.5f - margin;
 
             float x = Mathf.Clamp(position.x, center.x - halfX, center.x + halfX);
             float z = Mathf.Clamp(position.z, center.z - halfZ, center.z + halfZ);
@@ -46,7 +47,7 @@ namespace Core
         private void OnDrawGizmos()
         {
             Gizmos.color = Color.cyan;
-            Gizmos.DrawWireCube(transform.position, new Vector3(size.x, 0.1f, size.y));
+            Gizmos.DrawWireCube(transform.position, new Vector3(size.x, GizmoHeight, size.y));
         }
     }
 }

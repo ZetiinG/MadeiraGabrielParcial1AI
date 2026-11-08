@@ -1,11 +1,11 @@
-using System.Collections.Generic;
 using UnityEngine;
-using Boids;
 
 namespace Steering
 {
     public static class SteeringBehaviours
     {
+        private const float ArrivedDistance = 0.0001f;
+
         public static Vector3 Seek(Vector3 position, Vector3 velocity, Vector3 targetPosition, float maxSpeed)
         {
             Vector3 desired = (targetPosition - position).normalized * maxSpeed;
@@ -22,12 +22,20 @@ namespace Steering
         {
             Vector3 toTarget = targetPosition - position;
             float distance = toTarget.magnitude;
-            if (distance < 0.0001f)
+            if (distance < ArrivedDistance)
                 return -velocity;
 
             float speed = distance < slowingRadius ? maxSpeed * (distance / slowingRadius) : maxSpeed;
             Vector3 desired = toTarget.normalized * speed;
             return desired - velocity;
+        }
+
+        // Reynolds: persigue un punto que se mueve sobre un círculo proyectado delante del agente, así el rumbo cambia de forma suave.
+        public static Vector3 Wander(Vector3 position, Vector3 velocity, Vector3 forward, float wanderAngle, float circleDistance, float circleRadius, float maxSpeed)
+        {
+            Vector3 circleCenter = position + forward * circleDistance;
+            Vector3 offset = Quaternion.AngleAxis(wanderAngle, Vector3.up) * Vector3.forward * circleRadius;
+            return Seek(position, velocity, circleCenter + offset, maxSpeed);
         }
 
         public static Vector3 Pursue(Vector3 position, Vector3 velocity, Vector3 targetPosition, Vector3 targetVelocity, float maxSpeed, float predictionTime)
@@ -40,52 +48,6 @@ namespace Steering
         {
             Vector3 predictedPosition = threatPosition + threatVelocity * predictionTime;
             return Flee(position, velocity, predictedPosition, maxSpeed);
-        }
-
-        public static Vector3 Separation(Vector3 position, IReadOnlyList<BoidAgent> neighbors, float separationRadius)
-        {
-            Vector3 force = Vector3.zero;
-            int count = 0;
-
-            for (int i = 0; i < neighbors.Count; i++)
-            {
-                BoidAgent other = neighbors[i];
-                Vector3 offset = position - other.transform.position;
-                float distance = offset.magnitude;
-                if (distance > 0.0001f && distance < separationRadius)
-                {
-                    force += offset.normalized / distance;
-                    count++;
-                }
-            }
-
-            return count > 0 ? force / count : Vector3.zero;
-        }
-
-        public static Vector3 Alignment(Vector3 velocity, IReadOnlyList<BoidAgent> neighbors)
-        {
-            if (neighbors.Count == 0)
-                return Vector3.zero;
-
-            Vector3 averageVelocity = Vector3.zero;
-            for (int i = 0; i < neighbors.Count; i++)
-                averageVelocity += neighbors[i].Velocity;
-
-            averageVelocity /= neighbors.Count;
-            return averageVelocity - velocity;
-        }
-
-        public static Vector3 Cohesion(Vector3 position, IReadOnlyList<BoidAgent> neighbors)
-        {
-            if (neighbors.Count == 0)
-                return Vector3.zero;
-
-            Vector3 centerOfMass = Vector3.zero;
-            for (int i = 0; i < neighbors.Count; i++)
-                centerOfMass += neighbors[i].transform.position;
-
-            centerOfMass /= neighbors.Count;
-            return (centerOfMass - position).normalized;
         }
     }
 }

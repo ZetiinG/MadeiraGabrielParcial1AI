@@ -5,11 +5,11 @@ namespace Hunter
 {
     public class HunterProjectile : MonoBehaviour
     {
-        private BoidAgent _target;
+        private BoidHealth _target;
         private float _speed;
         private float _damage;
 
-        public void Initialize(BoidAgent target, float speed, float damage)
+        public void Initialize(BoidHealth target, float speed, float damage)
         {
             _target = target;
             _speed = speed;

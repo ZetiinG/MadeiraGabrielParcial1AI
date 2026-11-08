@@ -1,37 +1,45 @@
+using Boids;
+using FSM;
+
 namespace Hunter
 {
-    public class HunterGatherState : IHunterState
+    public class HunterGatherState : State<HunterController, HunterStateId>
     {
         private float _progress;
 
-        public void Enter(HunterController ctx)
+        public HunterGatherState(HunterController owner, StateMachine<HunterStateId> machine) : base(owner, machine) { }
+
+        public override void Enter()
         {
             _progress = 0f;
-            ctx.SetBodyMaterial(ctx.GatherMaterial);
+            Owner.Path.Clear();
         }
 
-        public void Tick(HunterController ctx, float deltaTime)
+        public override void Tick(float deltaTime)
         {
-            if (ctx.CurrentTarget == null || !ctx.CurrentTarget.IsDead)
+            BoidAgent target = Owner.Target;
+            if (target == null || !target.IsCollectable)
             {
-                ctx.TransitionTo(ctx.PatrolState, "Patrol");
+                TransitionTo(HunterStateId.Search);
                 return;
             }
 
-            ctx.ArrivePoint(ctx.CurrentTarget.transform.position, 2f);
+            HunterGathering gathering = Owner.Gathering;
+            Owner.Motor.Arrive(target.transform.position, gathering.SlowingRadius);
 
-            if (ctx.DistanceToTarget() > ctx.GatherInteractRadius)
+            if (Owner.Perception.DistanceTo(target) > gathering.InteractRadius)
                 return;
 
-            ctx.Stop();
+            Owner.Motor.Stop();
             _progress += deltaTime;
-            if (_progress >= ctx.GatherDuration)
-            {
-                ctx.CurrentTarget.OnGathered();
-                ctx.TransitionTo(ctx.PatrolState, "Patrol");
-            }
+            if (_progress < gathering.GatherDuration)
+                return;
+
+            target.Health.Gather();
+            gathering.Add();
+            TransitionTo(gathering.HasRequiredGathers ? HunterStateId.Exit : HunterStateId.Search);
         }
 
-        public void Exit(HunterController ctx) => _progress = 0f;
+        public override void Exit() => _progress = 0f;
     }
 }
